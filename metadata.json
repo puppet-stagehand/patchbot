@@ -1,0 +1,23 @@
+{
+  "name": "souldonetworks-patchbot",
+  "version": "0.1.0",
+  "author": "souldonetworks",
+  "summary": "Patch posture reporting (pull-path fact) and OS package patching (push-path Bolt task) for the Puppet Stagehand Console. Split out of stagehand so patch tooling can version and ship independently.",
+  "license": "Apache-2.0",
+  "source": "https://github.com/souldonetworks/patchbot",
+  "project_page": "https://github.com/souldonetworks/patchbot",
+  "issues_url": "https://github.com/souldonetworks/patchbot/issues",
+  "dependencies": [],
+  "operatingsystem_support": [
+    { "operatingsystem": "Ubuntu", "operatingsystemrelease": ["20.04", "22.04", "24.04"] },
+    { "operatingsystem": "Debian", "operatingsystemrelease": ["11", "12"] },
+    { "operatingsystem": "RedHat", "operatingsystemrelease": ["8", "9"] },
+    { "operatingsystem": "Rocky", "operatingsystemrelease": ["8", "9"] },
+    { "operatingsystem": "AlmaLinux", "operatingsystemrelease": ["8", "9"] },
+    { "operatingsystem": "windows", "operatingsystemrelease": ["2019", "2022", "10", "11"] }
+  ],
+  "requirements": [
+    { "name": "puppet", "version_requirement": ">= 8.0.0 < 9.0.0" }
+  ],
+  "tags": ["puppet-core", "console", "patching", "windows-update", "bolt"]
+}

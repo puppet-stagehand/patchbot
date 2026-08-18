@@ -1,6 +1,10 @@
 {
-  "description": "Apply available OS package updates (all, or security-only) on a node, optionally reboot when required, then refresh the pcm_patch posture. The console reads the resulting posture via the pcm_patch fact on the next run.",
+  "description": "Apply available OS updates (all, security-only, or a specific set of patch_ids) on a node, optionally reboot when required, then refresh the patchbot posture. The console reads the resulting posture via the patchbot fact on the next run. Dispatches to the POSIX (patch.sh) or Windows (patch.ps1) implementation automatically based on the target.",
   "input_method": "environment",
+  "implementations": [
+    { "name": "patch.sh", "requirements": ["shell"] },
+    { "name": "patch.ps1", "requirements": ["powershell"] }
+  ],
   "parameters": {
     "console_url": {
       "description": "Console base URL (server-injected; unused by the patch itself).",
@@ -11,9 +15,13 @@
       "type": "Optional[String[1]]"
     },
     "security_only": {
-      "description": "Apply only security updates when true; otherwise apply all available updates.",
+      "description": "Apply only security updates when true; otherwise apply all available updates. Ignored when patch_ids is set.",
       "type": "Boolean",
       "default": false
+    },
+    "patch_ids": {
+      "description": "Install only these specific patch/package ids, as reported in the patchbot fact's patches[] array (KB numbers on Windows, package names on Linux). Takes priority over security_only when set.",
+      "type": "Optional[Array[String[1]]]"
     },
     "reboot": {
       "description": "Reboot the node afterward if a reboot is required.",
