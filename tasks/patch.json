@@ -1,0 +1,24 @@
+{
+  "description": "Apply available OS package updates (all, or security-only) on a node, optionally reboot when required, then refresh the pcm_patch posture. The console reads the resulting posture via the pcm_patch fact on the next run.",
+  "input_method": "environment",
+  "parameters": {
+    "console_url": {
+      "description": "Console base URL (server-injected; unused by the patch itself).",
+      "type": "Optional[String[1]]"
+    },
+    "ingest_token": {
+      "description": "Server-injected; unused by the patch itself.",
+      "type": "Optional[String[1]]"
+    },
+    "security_only": {
+      "description": "Apply only security updates when true; otherwise apply all available updates.",
+      "type": "Boolean",
+      "default": false
+    },
+    "reboot": {
+      "description": "Reboot the node afterward if a reboot is required.",
+      "type": "Boolean",
+      "default": false
+    }
+  }
+}
