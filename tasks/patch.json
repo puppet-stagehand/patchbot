@@ -20,8 +20,8 @@
       "default": false
     },
     "patch_ids": {
-      "description": "Install only these specific patch/package ids, as reported in the patchbot fact's patches[] array (KB numbers on Windows, package names on Linux). Takes priority over security_only when set.",
-      "type": "Optional[Array[String[1]]]"
+      "description": "Install only these specific patch/package ids, as reported in the patchbot fact's patches[] array (KB numbers on Windows, package names on Linux). Takes priority over security_only when set. Must match [A-Za-z0-9][A-Za-z0-9._:+-]* -- rejected otherwise, since these are used unquoted on a package-manager command line running as root and a leading '-' or embedded whitespace would be read as a flag, not a package name.",
+      "type": "Optional[Array[Pattern[/\\A[A-Za-z0-9][A-Za-z0-9._:+-]*\\z/]]]"
     },
     "reboot": {
       "description": "Reboot the node afterward if a reboot is required.",

@@ -22,6 +22,19 @@ if [ -n "$PATCH_IDS_RAW" ] && [ "$PATCH_IDS_RAW" != "null" ] && [ "$PATCH_IDS_RA
   command -v jq >/dev/null 2>&1 || die "jq is required on the target to use patch_ids"
   PATCH_IDS=$(printf '%s' "$PATCH_IDS_RAW" | jq -r '.[]' 2>/dev/null) || die "patch_ids must be a JSON array of strings"
   [ -n "$PATCH_IDS" ] || die "patch_ids was provided but parsed to an empty list"
+
+  # Every id is used below via unquoted, word-split expansion (apt-get -y
+  # install $PATCH_IDS) so it becomes one argv element per package-manager
+  # invocation running as root. Validate BEFORE that happens, or this is an
+  # argument-injection hole: an id of "--allow-downgrades" (or any Debian/
+  # RPM package manager flag) is read as a flag, not a package name, and an
+  # id containing embedded whitespace (e.g. "foo --reinstall") word-splits
+  # into two argv entries and achieves the same thing even without a
+  # leading "-". patch.json's Pattern-typed parameter rejects this too, but
+  # this task must not trust that Bolt is always the caller.
+  if printf '%s\n' "$PATCH_IDS" | grep -qvE '^[A-Za-z0-9][A-Za-z0-9._:+-]*$'; then
+    die "patch_ids contains an invalid identifier (must match [A-Za-z0-9][A-Za-z0-9._:+-]*)"
+  fi
 fi
 
 APPLIED="unknown"
