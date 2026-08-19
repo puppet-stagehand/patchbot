@@ -13,6 +13,21 @@ function Fail($msg) {
   exit 1
 }
 
+# FailJson MSG
+#
+# Sibling to Fail() for BUSINESS-LOGIC failures only (a Windows Update
+# operation that ran but failed) -- as opposed to Fail()'s SETUP failures
+# (malformed patch_ids). Emits the established {"status": "error",
+# "error": "..."} embedded-status contract (AUDIT-04, mirroring patch.sh's
+# fail_json()) on stdout and exits 0, so the console/orchestrator can
+# always parse the outcome instead of an opaque stderr blob and a bare
+# non-zero exit.
+function FailJson($msg) {
+  $result = [pscustomobject]@{ status = 'error'; error = $msg }
+  $result | ConvertTo-Json -Compress
+  exit 0
+}
+
 $SecurityOnly = ($env:PT_security_only -eq 'true')
 $DoReboot     = ($env:PT_reboot -eq 'true')
 $PatchIdsRaw  = $env:PT_patch_ids
@@ -62,7 +77,7 @@ try {
     }
   }
 } catch {
-  Fail "update search failed: $($_.Exception.Message)"
+  FailJson "update search failed: $($_.Exception.Message)"
 }
 
 $applied = if ($PatchIds.Count -gt 0) { 'selected' } elseif ($SecurityOnly) { 'security' } else { 'all' }
@@ -79,7 +94,7 @@ if ($candidates.Count -gt 0) {
     $installResult = $installer.Install()
     $rebootRequired = [bool]$installResult.RebootRequired
   } catch {
-    Fail "update install failed: $($_.Exception.Message)"
+    FailJson "update install failed: $($_.Exception.Message)"
   }
 } else {
   # Nothing matched (e.g. patch_ids named updates that are no longer
