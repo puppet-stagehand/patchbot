@@ -7,6 +7,17 @@ set -u
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
+# fail_json REASON
+#
+# Sibling to die() for BUSINESS-LOGIC failures only (a package-manager
+# operation that ran but failed) -- as opposed to die()'s SETUP failures
+# (missing jq, malformed patch_ids). Emits the established
+# {"status": "error", "error": "..."} embedded-status contract (AUDIT-04,
+# matching install_ansible.sh/discover.sh/run_playbook.sh) on stdout and
+# exits 0, so the console/orchestrator can always parse the outcome
+# instead of an opaque stderr blob and a bare non-zero exit.
+fail_json() { printf '{"status": "error", "error": "%s"}\n' "$*"; exit 0; }
+
 SECURITY_ONLY="${PT_security_only:-false}"
 DO_REBOOT="${PT_reboot:-false}"
 PATCH_IDS_RAW="${PT_patch_ids:-}"
@@ -44,26 +55,26 @@ REBOOT_REQUIRED="false"
 export DEBIAN_FRONTEND=noninteractive
 
 if command -v apt-get >/dev/null 2>&1; then
-  apt-get -qq update >/dev/null 2>&1 || die "apt-get update failed"
+  apt-get -qq update >/dev/null 2>&1 || fail_json "apt-get update failed"
   if [ -n "$PATCH_IDS" ]; then
     # shellcheck disable=SC2086
-    apt-get -y install $PATCH_IDS >/dev/null 2>&1 || die "apt install of selected patch_ids failed"
+    apt-get -y install $PATCH_IDS >/dev/null 2>&1 || fail_json "apt install of selected patch_ids failed"
     APPLIED="selected"
   elif [ "$SECURITY_ONLY" = "true" ]; then
     if command -v unattended-upgrade >/dev/null 2>&1; then
-      unattended-upgrade >/dev/null 2>&1 || die "unattended-upgrade failed"
+      unattended-upgrade >/dev/null 2>&1 || fail_json "unattended-upgrade failed"
       APPLIED="security"
     else
       # Approximate security-only: upgrade packages from a *-security suite.
       PKGS=$(apt-get -s dist-upgrade 2>/dev/null | awk '/^Inst / && /security/i {print $2}')
       if [ -n "$PKGS" ]; then
         # shellcheck disable=SC2086
-        apt-get -y install $PKGS >/dev/null 2>&1 || die "apt security upgrade failed"
+        apt-get -y install $PKGS >/dev/null 2>&1 || fail_json "apt security upgrade failed"
       fi
       APPLIED="security"
     fi
   else
-    apt-get -y dist-upgrade >/dev/null 2>&1 || die "apt dist-upgrade failed"
+    apt-get -y dist-upgrade >/dev/null 2>&1 || fail_json "apt dist-upgrade failed"
     APPLIED="all"
   fi
   [ -f /var/run/reboot-required ] && REBOOT_REQUIRED="true"
@@ -71,13 +82,13 @@ if command -v apt-get >/dev/null 2>&1; then
 elif command -v dnf >/dev/null 2>&1; then
   if [ -n "$PATCH_IDS" ]; then
     # shellcheck disable=SC2086
-    dnf -y upgrade $PATCH_IDS >/dev/null 2>&1 || die "dnf upgrade of selected patch_ids failed"
+    dnf -y upgrade $PATCH_IDS >/dev/null 2>&1 || fail_json "dnf upgrade of selected patch_ids failed"
     APPLIED="selected"
   elif [ "$SECURITY_ONLY" = "true" ]; then
-    dnf -y --security upgrade >/dev/null 2>&1 || die "dnf security upgrade failed"
+    dnf -y --security upgrade >/dev/null 2>&1 || fail_json "dnf security upgrade failed"
     APPLIED="security"
   else
-    dnf -y upgrade >/dev/null 2>&1 || die "dnf upgrade failed"
+    dnf -y upgrade >/dev/null 2>&1 || fail_json "dnf upgrade failed"
     APPLIED="all"
   fi
   if command -v needs-restarting >/dev/null 2>&1; then
@@ -87,20 +98,20 @@ elif command -v dnf >/dev/null 2>&1; then
 elif command -v yum >/dev/null 2>&1; then
   if [ -n "$PATCH_IDS" ]; then
     # shellcheck disable=SC2086
-    yum -y update $PATCH_IDS >/dev/null 2>&1 || die "yum update of selected patch_ids failed"
+    yum -y update $PATCH_IDS >/dev/null 2>&1 || fail_json "yum update of selected patch_ids failed"
     APPLIED="selected"
   elif [ "$SECURITY_ONLY" = "true" ]; then
-    yum -y --security update >/dev/null 2>&1 || die "yum security update failed"
+    yum -y --security update >/dev/null 2>&1 || fail_json "yum security update failed"
     APPLIED="security"
   else
-    yum -y update >/dev/null 2>&1 || die "yum update failed"
+    yum -y update >/dev/null 2>&1 || fail_json "yum update failed"
     APPLIED="all"
   fi
   if command -v needs-restarting >/dev/null 2>&1; then
     needs-restarting -r >/dev/null 2>&1 || REBOOT_REQUIRED="true"
   fi
 else
-  die "no supported package manager (apt/dnf/yum) found"
+  fail_json "no supported package manager (apt/dnf/yum) found"
 fi
 
 # Refresh the patchbot external fact cache best-effort so PuppetDB/console see

@@ -1,6 +1,6 @@
 {
   "description": "Apply available OS updates (all, security-only, or a specific set of patch_ids) on a node, optionally reboot when required, then refresh the patchbot posture. The console reads the resulting posture via the patchbot fact on the next run. Dispatches to the POSIX (patch.sh) or Windows (patch.ps1) implementation automatically based on the target.",
-  "input_method": "environment",
+  "input_method": "both",
   "implementations": [
     { "name": "patch.sh", "requirements": ["shell"] },
     { "name": "patch.ps1", "requirements": ["powershell"] }
@@ -12,7 +12,8 @@
     },
     "ingest_token": {
       "description": "Server-injected; unused by the patch itself.",
-      "type": "Optional[String[1]]"
+      "type": "Optional[String[1]]",
+      "sensitive": true
     },
     "security_only": {
       "description": "Apply only security updates when true; otherwise apply all available updates. Ignored when patch_ids is set.",
