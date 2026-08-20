@@ -1,6 +1,6 @@
 # patchbot — Package Updates + Windows Update for the Puppet Stagehand Console
 
-Forge: `souldonetworks-patchbot`. Split out of the `stagehand` module so patch
+Forge: `stagehand-patchbot`. Split out of the `stagehand` module so patch
 tooling versions and ships independently. Two complementary paths, both
 cross-platform (Linux and Windows):
 
