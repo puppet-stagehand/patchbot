@@ -1,0 +1,9 @@
+---
+# Managed like the sibling soup-os_patching/stagehand modulesync scaffolds --
+# patchbot's metadata.json currently declares no module dependencies, so
+# there is nothing to pull in beyond the module's own fixtures symlink,
+# which puppetlabs_spec_helper/voxpupuli-test wires up automatically from
+# metadata.json's "name". Add forge_modules/repositories entries here if
+# patchbot ever gains a real dependency (e.g. puppetlabs/stdlib).
+fixtures:
+  forge_modules: {}
