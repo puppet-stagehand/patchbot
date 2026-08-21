@@ -80,16 +80,30 @@ BeforeAll {
         return $update
     }
 
+    # NOTE on .GetNewClosure(): a scriptblock passed to Add-Member
+    # -MemberType ScriptMethod/ScriptProperty does NOT lexically capture
+    # its enclosing function's local variables by default in PowerShell --
+    # once the defining function returns, a plain `{ return $searcher }`
+    # resolves $searcher as $null at invocation time (it's out of scope),
+    # not the value that was live when Add-Member ran. .GetNewClosure()
+    # snapshots the current variable scope into the scriptblock, making it
+    # a real closure. Every ScriptMethod/ScriptProperty below that
+    # references an outer-scope variable needs it; ones with a literal
+    # body (empty, or a bare `throw '...'`) don't. This was the actual
+    # root cause behind every failure the first real CI run surfaced here
+    # (mocked WUA objects silently returning $null from their own
+    # methods) -- authored blind, never run against real Pester before.
+
     function New-FakeUpdateColl {
         $items = [System.Collections.ArrayList]::new()
         $coll = [pscustomobject]@{}
         $coll | Add-Member -MemberType ScriptMethod -Name Add -Value {
             param($u)
             $items.Add($u) | Out-Null
-        } -Force
+        }.GetNewClosure() -Force
         $coll | Add-Member -MemberType ScriptProperty -Name Count -Value {
             $items.Count
-        } -Force
+        }.GetNewClosure() -Force
         return $coll
     }
 
@@ -102,13 +116,13 @@ BeforeAll {
         $searcher | Add-Member -MemberType ScriptMethod -Name Search -Value {
             param($criteria)
             return $searchResult
-        } -Force
+        }.GetNewClosure() -Force
 
         $installResult = [pscustomobject]@{ RebootRequired = $false }
         $installer = [pscustomobject]@{ Updates = $null }
         $installer | Add-Member -MemberType ScriptMethod -Name Install -Value {
             return $installResult
-        } -Force
+        }.GetNewClosure() -Force
 
         $downloader = [pscustomobject]@{ Updates = $null }
         $downloader | Add-Member -MemberType ScriptMethod -Name Download -Value { } -Force
@@ -116,13 +130,13 @@ BeforeAll {
         $session = [pscustomobject]@{}
         $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateSearcher -Value {
             return $searcher
-        } -Force
+        }.GetNewClosure() -Force
         $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateDownloader -Value {
             return $downloader
-        } -Force
+        }.GetNewClosure() -Force
         $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateInstaller -Value {
             return $installer
-        } -Force
+        }.GetNewClosure() -Force
 
         return $session
     }
@@ -284,14 +298,14 @@ Describe 'patch.ps1' {
                         $session = [pscustomobject]@{}
                         $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateSearcher -Value {
                             return $searcher
-                        } -Force
+                        }.GetNewClosure() -Force
                         return $session
                     }
                     if ($ComObject -eq 'Microsoft.Update.UpdateColl') {
                         $items = [System.Collections.ArrayList]::new()
                         $coll = [pscustomobject]@{}
-                        $coll | Add-Member -MemberType ScriptMethod -Name Add -Value { param($u) $items.Add($u) | Out-Null } -Force
-                        $coll | Add-Member -MemberType ScriptProperty -Name Count -Value { $items.Count } -Force
+                        $coll | Add-Member -MemberType ScriptMethod -Name Add -Value { param($u) $items.Add($u) | Out-Null }.GetNewClosure() -Force
+                        $coll | Add-Member -MemberType ScriptProperty -Name Count -Value { $items.Count }.GetNewClosure() -Force
                         return $coll
                     }
                     Microsoft.PowerShell.Utility\New-Object @PSBoundParameters
@@ -328,7 +342,7 @@ Describe 'patch.ps1' {
                         $searcher | Add-Member -MemberType ScriptMethod -Name Search -Value {
                             param($criteria)
                             return [pscustomobject]@{ Updates = @($update) }
-                        } -Force
+                        }.GetNewClosure() -Force
 
                         $downloader = [pscustomobject]@{ Updates = $null }
                         $downloader | Add-Member -MemberType ScriptMethod -Name Download -Value { } -Force
@@ -339,16 +353,16 @@ Describe 'patch.ps1' {
                         } -Force
 
                         $session = [pscustomobject]@{}
-                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateSearcher -Value { return $searcher } -Force
-                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateDownloader -Value { return $downloader } -Force
-                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateInstaller -Value { return $installer } -Force
+                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateSearcher -Value { return $searcher }.GetNewClosure() -Force
+                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateDownloader -Value { return $downloader }.GetNewClosure() -Force
+                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateInstaller -Value { return $installer }.GetNewClosure() -Force
                         return $session
                     }
                     if ($ComObject -eq 'Microsoft.Update.UpdateColl') {
                         $items = [System.Collections.ArrayList]::new()
                         $coll = [pscustomobject]@{}
-                        $coll | Add-Member -MemberType ScriptMethod -Name Add -Value { param($u) $items.Add($u) | Out-Null } -Force
-                        $coll | Add-Member -MemberType ScriptProperty -Name Count -Value { $items.Count } -Force
+                        $coll | Add-Member -MemberType ScriptMethod -Name Add -Value { param($u) $items.Add($u) | Out-Null }.GetNewClosure() -Force
+                        $coll | Add-Member -MemberType ScriptProperty -Name Count -Value { $items.Count }.GetNewClosure() -Force
                         return $coll
                     }
                     Microsoft.PowerShell.Utility\New-Object @PSBoundParameters
@@ -389,16 +403,16 @@ Describe 'patch.ps1' {
                         } -Force
 
                         $session = [pscustomobject]@{}
-                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateSearcher -Value { return $searcher } -Force
-                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateDownloader -Value { return $downloader } -Force
-                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateInstaller -Value { return $installer } -Force
+                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateSearcher -Value { return $searcher }.GetNewClosure() -Force
+                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateDownloader -Value { return $downloader }.GetNewClosure() -Force
+                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateInstaller -Value { return $installer }.GetNewClosure() -Force
                         return $session
                     }
                     if ($ComObject -eq 'Microsoft.Update.UpdateColl') {
                         $items = [System.Collections.ArrayList]::new()
                         $coll = [pscustomobject]@{}
-                        $coll | Add-Member -MemberType ScriptMethod -Name Add -Value { param($u) $items.Add($u) | Out-Null } -Force
-                        $coll | Add-Member -MemberType ScriptProperty -Name Count -Value { $items.Count } -Force
+                        $coll | Add-Member -MemberType ScriptMethod -Name Add -Value { param($u) $items.Add($u) | Out-Null }.GetNewClosure() -Force
+                        $coll | Add-Member -MemberType ScriptProperty -Name Count -Value { $items.Count }.GetNewClosure() -Force
                         return $coll
                     }
                     if ($ComObject -eq 'Microsoft.Update.SystemInfo') {
