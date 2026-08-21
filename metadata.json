@@ -2,7 +2,7 @@
   "name": "stagehand-patchbot",
   "version": "0.1.0",
   "author": "stagehand",
-  "summary": "Patch posture reporting (pull-path fact) and OS package patching (push-path Bolt task) for the Puppet Stagehand Console. Split out of stagehand so patch tooling can version and ship independently.",
+  "summary": "Patch posture reporting (pull-path fact) and OS package patching (push-path Bolt task) for the Puppet Stagehand Console.",
   "license": "Apache-2.0",
   "source": "https://github.com/puppet-stagehand/patchbot",
   "project_page": "https://github.com/puppet-stagehand/patchbot",

@@ -1,0 +1,36 @@
+---
+# Release gate: runs the same supply-chain scan as every PR, one more time
+# against the exact tagged tree, and only publishes a GitHub Release if it
+# passes. GitHub has no server-side hook to reject a `git push --tags`
+# outright -- the achievable gate is "the tag exists, but nothing gets
+# published as a release, and the workflow run is a loud red X" -- so
+# treat a tag with no corresponding GitHub Release as "did not pass the
+# gate," not as "forgot a step."
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  security-scan:
+    name: Security (release gate)
+    uses: ./.github/workflows/security-scan.yml
+
+  publish:
+    name: Publish GitHub Release
+    needs: security-scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Create release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          generate_release_notes: true

@@ -1,0 +1,152 @@
+---
+name: CI
+
+on:
+  pull_request:
+    paths:
+      - "manifests/**"
+      - "templates/**"
+      - "tasks/**"
+      - "tests/**"
+      - "lib/**"
+      - "files/**"
+      - "facts.d/**"
+      - "spec/**"
+      - "metadata.json"
+      - "Gemfile"
+      - "tools/supplychain/**"
+      - ".gitleaks.toml"
+      - "supplychain.waivers.json"
+      - ".github/workflows/**"
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  security-scan:
+    name: Security
+    uses: ./.github/workflows/security-scan.yml
+
+  lint:
+    name: Lint / validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
+        with:
+          ruby-version: "3.2"
+          bundler-cache: true
+
+      - name: puppet-lint + syntax + metadata-json-lint
+        run: bundle exec rake validate lint metadata_lint
+
+  unit-test:
+    name: rspec-puppet (${{ matrix.label }})
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Real, resolvable releases -- these block the PR.
+          - label: "Puppet Core 7"
+            gem_name: puppet
+            gem_version: "~> 7.0"
+            # 3.2, not puppet 7's own minimum (Ruby >= 2.5) -- the fixed
+            # (non-matrix) rspec-puppet-facts ~> 6.1 dependency in Gemfile
+            # requires Ruby >= 3.2 regardless of which Puppet is under
+            # test; this is pure test-tooling parsing the DSL, not a live
+            # agent run, so it's independent of Puppet 7's own Ruby floor.
+            ruby_version: "3.2"
+            experimental: false
+          - label: "Puppet Core 8"
+            gem_name: puppet
+            gem_version: "~> 8.0"
+            ruby_version: "3.2"
+            experimental: false
+          - label: "OpenVox 8"
+            gem_name: openvox
+            gem_version: "~> 8.0"
+            ruby_version: "3.2"
+            experimental: false
+          # Puppet 9 has not shipped on RubyGems as of this workflow's
+          # authoring (2026-08-21; latest published `puppet` gem is
+          # 8.10.0) -- this leg is real and wired in, but can only start
+          # passing once Puppet 9 actually ships. experimental: true so it
+          # never blocks a PR in the meantime; watch it turn green.
+          - label: "Puppet Core 9 (experimental -- not yet released)"
+            gem_name: puppet
+            gem_version: "~> 9.0"
+            ruby_version: "3.2"
+            experimental: true
+          # OpenVox 9 exists only as a pre-release (9.0.0-beta2 at pin
+          # time) -- forward-compat signal, not a support commitment.
+          - label: "OpenVox 9 (experimental -- pre-release)"
+            gem_name: openvox
+            gem_version: ">= 9.0.0.beta1"
+            ruby_version: "3.2"
+            experimental: true
+    continue-on-error: ${{ matrix.experimental }}
+    env:
+      CI_PUPPET_GEM_NAME: ${{ matrix.gem_name }}
+      CI_PUPPET_GEM_VERSION: ${{ matrix.gem_version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
+        with:
+          ruby-version: ${{ matrix.ruby_version }}
+
+      - name: bundle install (fresh per matrix leg)
+        # Each leg resolves its own gem graph for CI_PUPPET_GEM_NAME/
+        # VERSION -- the committed Gemfile.lock stays the local-dev default
+        # (Puppet 8.10) and is never touched here.
+        run: |
+          rm -f Gemfile.lock
+          bundle install --jobs 4 --retry 3
+
+      - name: rspec-puppet
+        run: bundle exec rake spec_prep spec_standalone
+
+  task-tests:
+    name: Bolt task shell tests
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Run tasks/*_test.sh and tests/*.sh
+        run: |
+          set -eu
+          status=0
+          for t in tasks/*_test.sh tests/*.sh; do
+            [ -f "$t" ] || continue
+            echo "== $t =="
+            sh "$t" || status=1
+          done
+          exit "$status"
+
+  windows-task-tests:
+    name: Bolt task Pester tests (Windows)
+    needs: lint
+    # patch.ps1/patch.Tests.ps1 are patchbot-specific -- stagehand has no
+    # PowerShell task, so this job doesn't exist in the reference pipeline.
+    # windows-latest ships Pester preinstalled; patch.Tests.ps1's own header
+    # comment documents it was authored but never executed against a real
+    # pwsh/Pester runtime before this workflow -- this is the first real
+    # verification of that file's syntax and assertions.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Run tasks/patch.Tests.ps1 (Pester)
+        shell: pwsh
+        run: |
+          Import-Module Pester -MinimumVersion 5.0
+          $result = Invoke-Pester -Path tasks/patch.Tests.ps1 -PassThru
+          if ($result.FailedCount -gt 0) {
+            throw "$($result.FailedCount) Pester test(s) failed"
+          }

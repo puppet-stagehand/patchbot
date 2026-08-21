@@ -1,0 +1,6 @@
+# patchbot's metadata.json has no dependencies (no stdlib functions used
+# in manifests/init.pp — native resource types + selectors only), so
+# unlike stagehand this fixture file needs no forge_modules entry.
+fixtures:
+  symlinks:
+    patchbot: "#{source_dir}"
