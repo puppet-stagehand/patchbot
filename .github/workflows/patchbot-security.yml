@@ -1,0 +1,97 @@
+---
+# Security/malware scanning for puppet-stagehand/patchbot.
+#
+# This is intentionally NOT part of the modulesync-managed ci.yml -- same
+# reasoning as patchbot-puppet9-acceptance.yml: it is stagehand-owned
+# automation that a modulesync run would revert.
+#
+# This workflow needs no real, disposable, or beta infrastructure -- it runs
+# entirely on a standard GitHub-hosted runner on every push/PR, so it is NOT
+# gated behind a "WIRED, NOT ARMED" repo variable. It is meant to actually
+# catch things and therefore fails closed (blocks CI) on real findings
+# rather than being decorative:
+#
+#   - bundler-audit checks Gemfile.lock (this module's Ruby test/dev/release
+#     tooling deps, resolved fresh in this job) against the community
+#     ruby-advisory-db for known CVEs.
+#   - a Trivy filesystem scan (vulnerabilities + misconfiguration + secret
+#     detection) covers the module source tree itself, installed via the
+#     exact pinned-version + sha256-checksum-verified pattern used by
+#     ~/Code/pcm/trivy/tasks/trivy_scan.sh (that pin/verify approach was
+#     itself a real fix for CVE-2026-33634 -- an unpinned curl|sh trivy
+#     installer that trusted whatever "main"/"latest" currently contained,
+#     which a malicious v0.69.4/v0.69.5/v0.69.6 release turned into a live
+#     supply-chain compromise, GHSA-69fq-xp46-6x23). Re-verify this pin
+#     (version + checksum) against
+#     https://github.com/aquasecurity/trivy/releases before bumping it --
+#     never pin 0.69.4, 0.69.5, or 0.69.6.
+
+name: Patchbot Security
+
+# yamllint disable-line rule:truthy
+on:
+  pull_request: {}
+  push:
+    branches:
+      - main
+      - master
+
+concurrency:
+  group: patchbot-security-${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  bundler-audit:
+    name: bundler-audit (Ruby gem CVEs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
+      - name: Install bundler-audit
+        run: gem install bundler-audit --no-document
+      - name: Check Gemfile.lock against the ruby-advisory-db (fails closed on findings)
+        run: bundler-audit check --update
+
+  trivy-fs:
+    name: Trivy filesystem scan (vuln + misconfig + secret)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install trivy (pinned + checksum-verified)
+        env:
+          TRIVY_VERSION: '0.72.0'
+        run: |
+          set -euo pipefail
+          ASSET="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          BASE="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+          TMPDIR=$(mktemp -d)
+          trap 'rm -rf "$TMPDIR"' EXIT
+
+          curl -sfL "${BASE}/${ASSET}" -o "${TMPDIR}/${ASSET}"
+          curl -sfL "${BASE}/trivy_${TRIVY_VERSION}_checksums.txt" -o "${TMPDIR}/checksums.txt"
+
+          EXPECTED=$(grep " ${ASSET}\$" "${TMPDIR}/checksums.txt" | awk '{print $1}')
+          [ -n "$EXPECTED" ] || { echo "::error::no checksum entry found for ${ASSET} in checksums.txt"; exit 1; }
+          ACTUAL=$(sha256sum "${TMPDIR}/${ASSET}" | awk '{print $1}')
+          [ "$EXPECTED" = "$ACTUAL" ] || { echo "::error::trivy checksum mismatch: expected $EXPECTED got $ACTUAL"; exit 1; }
+
+          tar -xzf "${TMPDIR}/${ASSET}" -C "${TMPDIR}" trivy
+          sudo install -m 0755 "${TMPDIR}/trivy" /usr/local/bin/trivy
+          trivy --version
+
+      - name: Trivy filesystem scan (fails closed on CRITICAL/HIGH findings)
+        run: |
+          set -euo pipefail
+          trivy fs \
+            --scanners vuln,misconfig,secret \
+            --severity CRITICAL,HIGH \
+            --exit-code 1 \
+            --skip-dirs spec/fixtures \
+            .

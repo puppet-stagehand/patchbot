@@ -1,0 +1,133 @@
+---
+# Managed by modulesync - DO NOT EDIT
+# https://voxpupuli.org/docs/updating-files-managed-with-modulesync/
+#
+# DEVIATION FROM UPSTREAM (puppet-stagehand/patchbot): the `matrix.collection`
+# list below and the `openvox9-beta` job are hand-maintained for this module
+# and will be reverted by the next modulesync run, same as every other
+# stagehand-owned deviation in this repo (see
+# patchbot-puppet9-acceptance.yml/patchbot-security.yml headers). Re-apply
+# this comment block and the two edits below after any modulesync sync that
+# touches this file. Rationale:
+#   - puppet7/puppet8/openvox8 are the real, GA collections this module
+#     declares support for (metadata.json requirements: puppet >= 7.0.0 <
+#     9.0.0, openvox >= 8.0.0 < 10.0.0).
+#   - puppet9 has no puppet gem yet (rubygems.org tops out at 8.10.0) and
+#     has no `beaker_collection` value in voxpupuli/gha-puppet's beaker.yml@v4
+#     (which only knows puppet7, puppet8, openvox7, openvox8, staging), so it
+#     cannot run through this dependency-resolution job at all yet. Its
+#     unit-test coverage comes from the auto-generated `unit` job matrix
+#     (metadata2gha reads metadata.json's puppet requirement -- puppet 7/8
+#     are the gems that exist) and its real-package acceptance path lives in
+#     patchbot-puppet9-acceptance.yml (WIRED, NOT ARMED; see that file's
+#     header).
+#   - openvox9 DOES have a real gem (through 9.0.0.pre.beta2) and a real
+#     (beta) apt/yum repo, so it is included below as a best-effort,
+#     continue-on-error job rather than silently ignored or folded into the
+#     required matrix. Locally, `bundle install` with an openvox >= 8.24
+#     constraint (which covers every current 9.x prerelease) reliably fails
+#     to resolve while the :system_tests group (puppet_litmus -> bolt) is in
+#     the same Gemfile -- openvox >= 8.24.0 needs puppet-resource_api ~> 2.0,
+#     bolt's puppet dependency chain still needs the ~> 1.5-compatible line.
+#     See Gemfile's header comment for the full explanation. That is exactly
+#     why this job is continue-on-error rather than required: a real,
+#     structural, upstream ecosystem conflict, not a bug in this module.
+name: CI
+
+# yamllint disable-line rule:truthy
+on:
+  pull_request: {}
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      beaker_staging_url:
+        description: |-
+          URL to a staging Server to test unreleased packages.
+          We will append the version to the Server and assume all packages are in the same directory.
+          Only supported for AIO packages.
+        required: false
+        type: string
+        default: 'https://artifacts.voxpupuli.org/openvox-agent'
+      beaker_collection:
+        description: |-
+          When set to staging, we will download the packages from staging_url.
+          Otherwise we will use the official repos. Supported values: puppet7, puppet8, openvox7, openvox8, staging.
+          openvox9 also works here (best-effort, beta upstream) but is not one of
+          voxpupuli/gha-puppet's officially documented beaker_collection values.
+          When unset, we will generate a list of supported collections based on metadata.json.
+        required: false
+        type: string
+      beaker_staging_version:
+        description: |-
+          The package version we want to test.
+          Only used for beaker_collection = staging
+        required: false
+        type: string
+
+concurrency:
+  group: ${{ github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  puppet:
+    name: ${{ matrix.collection }} dependency resolution
+    strategy:
+      fail-fast: false
+      matrix:
+        collection:
+          - puppet7
+          - puppet8
+          - openvox8
+    uses: voxpupuli/gha-puppet/.github/workflows/beaker.yml@v4
+    with:
+      beaker_staging_url: ${{ inputs.beaker_staging_url }}
+      beaker_collection: ${{ inputs.beaker_collection || matrix.collection }}
+      beaker_staging_version: ${{ inputs.beaker_staging_version }}
+
+  # Best-effort/beta: openvox9 has a real gem (through 9.0.0.pre.beta2) and a
+  # real apt/yum repo (openvox9, live since 2026-07-15), but upstream OpenVox
+  # itself calls that repo "beta" and explicitly advises against production
+  # use, and voxpupuli/gha-puppet's beaker.yml@v4 does not document openvox9
+  # as a supported `beaker_collection` value (only puppet7, puppet8, openvox7,
+  # openvox8, staging are documented). This job is therefore kept OUT of the
+  # required `puppet` matrix above. Promote it into the main matrix once
+  # gha-puppet documents openvox9 and/or upstream OpenVox calls openvox9 GA.
+  #
+  # NOTE on "best-effort": `continue-on-error` is NOT a valid key on a job
+  # that calls a reusable workflow via `uses:` -- GitHub Actions only allows
+  # name/uses/with/secrets/needs/if/permissions on such jobs (confirmed with
+  # `actionlint`; adding it here would make this file fail GitHub's own
+  # workflow parser, not just fail silently). So "best-effort" here is
+  # enforced the GitHub-supported way instead: this job is deliberately left
+  # OUT of any required branch-protection status checks, and the
+  # `openvox9-beta-gate` job below always succeeds and is what any required
+  # check should point at, regardless of whether openvox9-beta itself went
+  # red. The underlying job's own pass/fail is still visible in the PR
+  # checks list for anyone who wants to look.
+  openvox9-beta:
+    name: openvox9 dependency resolution (beta, best-effort)
+    uses: voxpupuli/gha-puppet/.github/workflows/beaker.yml@v4
+    with:
+      beaker_staging_url: ${{ inputs.beaker_staging_url }}
+      beaker_collection: openvox9
+      beaker_staging_version: ${{ inputs.beaker_staging_version }}
+
+  openvox9-beta-gate:
+    name: openvox9 dependency resolution (beta, best-effort) gate
+    needs: openvox9-beta
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report result without failing CI
+        env:
+          RESULT: ${{ needs.openvox9-beta.result }}
+        run: |
+          set -euo pipefail
+          echo "openvox9-beta result: ${RESULT}"
+          echo "This gate always succeeds -- openvox9 is best-effort/beta and never blocks CI."

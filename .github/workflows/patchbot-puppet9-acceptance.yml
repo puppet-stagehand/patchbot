@@ -1,0 +1,156 @@
+---
+# Real Puppet 9 validation for puppet-stagehand/patchbot.
+#
+# Puppet's authenticated package repos (apt-puppetcore.puppet.com,
+# yum-puppetcore.puppet.com) publish real puppet9 release packages, but:
+#   - there is no `puppet` RubyGem for 9.x yet (rubygems.org tops out at
+#     8.10.0), so puppet9 cannot be exercised by the normal rspec-puppet
+#     unit-test matrix (that comes from the puppet/openvox gems declared in
+#     metadata.json's `requirements` -- see ci.yml's header comment);
+#   - voxpupuli/gha-puppet's beaker.yml@v4 does not document `puppet9` as a
+#     supported `beaker_collection` value either, so it cannot ride the
+#     normal ci.yml dependency-resolution job.
+# This workflow is the honestly-scoped, separate path: it installs the real
+# puppet9 agent package from the authenticated puppetcore repo (HTTP Basic
+# auth, username literal "forge-key", password = secrets.FORGE_API_TOKEN)
+# and compiles this module's real manifests against it on real OS facts.
+# This is a compile/catalog check, not a full acceptance run -- puppet9 is
+# not, and must not become, a claimed-support row in this module's
+# documentation until Puppet Core itself calls puppet9 GA. Treat any green
+# run here as "installs and compiles", not "supported".
+#
+# WIRED, NOT ARMED: this workflow requires the repository variable
+# PUPPET9_ACCEPTANCE_ARMED to be exactly "true" before any provisioning/
+# install job will run. That variable is deliberately unset. Arming
+# requires:
+#   vars.PUPPET9_ACCEPTANCE_ARMED   Set to "true" only once the items below
+#                                    are actually in place and reviewed.
+#   secrets.FORGE_API_TOKEN         Already present on this repo (used
+#                                    for Forge publishing); confirm it is
+#                                    still valid against
+#                                    apt-puppetcore.puppet.com/
+#                                    yum-puppetcore.puppet.com before arming,
+#                                    since a Forge-publish-scoped token is
+#                                    not guaranteed to also carry
+#                                    puppetcore-repo entitlement.
+# Also re-pin every `uses:` action below to a reviewed commit SHA in the
+# same change that sets PUPPET9_ACCEPTANCE_ARMED=true.
+
+name: Patchbot Puppet 9 Acceptance (beta, real packages)
+
+# yamllint disable-line rule:truthy
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type EXACTLY "run puppet9 acceptance" to allow this run to install real puppet9 packages'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: patchbot-puppet9-acceptance-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Preflight (fail closed unless armed)
+    runs-on: ubuntu-latest
+    outputs:
+      armed: ${{ steps.gate.outputs.armed }}
+    steps:
+      - name: Gate on PUPPET9_ACCEPTANCE_ARMED and explicit confirmation
+        id: gate
+        env:
+          ARMED: ${{ vars.PUPPET9_ACCEPTANCE_ARMED }}
+          CONFIRM_INPUT: ${{ github.event.inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [ "${ARMED:-}" != "true" ]; then
+            echo "::error::PUPPET9_ACCEPTANCE_ARMED is not 'true'. Puppet 9 is a best-effort/beta path; see this file's header."
+            echo "armed=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          if [ "${CONFIRM_INPUT:-}" != "run puppet9 acceptance" ]; then
+            echo "::error::workflow_dispatch confirmation phrase did not match."
+            echo "armed=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "armed=true" >> "$GITHUB_OUTPUT"
+
+  linux:
+    name: Linux (${{ matrix.target.name }})
+    needs: preflight
+    if: needs.preflight.outputs.armed == 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ matrix.target.image }}
+    continue-on-error: true # best-effort: upstream puppet9 packaging is new and unverified end-to-end
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: ubuntu-24.04 (apt)
+            image: ubuntu:24.04
+            pkg: apt
+          - name: rockylinux-9 (dnf)
+            image: rockylinux:9
+            pkg: dnf
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the real puppet9 agent from the authenticated puppetcore repo
+        env:
+          FORGE_API_TOKEN: ${{ secrets.FORGE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "${FORGE_API_TOKEN:-}" || { echo "::error::secrets.FORGE_API_TOKEN is not set"; exit 1; }
+
+          case "${{ matrix.target.pkg }}" in
+            apt)
+              apt-get update -qq && apt-get install -y -qq curl ca-certificates
+              CODENAME=$(. /etc/os-release && echo "${VERSION_CODENAME:-}")
+              [ -n "$CODENAME" ] || { echo "::error::no VERSION_CODENAME in os-release"; exit 1; }
+              echo ">>> adding puppetcore apt repo (${CODENAME}, puppet9)"
+              curl -fsSL -o /tmp/puppet9-release.deb \
+                "https://apt-puppetcore.puppet.com/public/puppet9-release-${CODENAME}.deb"
+              dpkg -i /tmp/puppet9-release.deb
+              install -m 0600 /dev/null /etc/apt/auth.conf.d/apt-puppetcore-puppet.conf
+              cat > /etc/apt/auth.conf.d/apt-puppetcore-puppet.conf <<AUTHEOF
+          machine apt-puppetcore.puppet.com
+          login forge-key
+          password ${FORGE_API_TOKEN}
+          AUTHEOF
+              apt-get update -qq
+              apt-get install -y -qq puppet-agent
+              ;;
+            dnf)
+              dnf install -y -q curl
+              ELV=$(rpm -E %{rhel} 2>/dev/null || true)
+              case "$ELV" in
+                ''|*%*) echo "::error::cannot determine EL major via rpm -E %{rhel}"; exit 1 ;;
+              esac
+              echo ">>> adding puppetcore yum repo (el${ELV}, puppet9)"
+              rpm -Uvh "https://yum-puppetcore.puppet.com/public/puppet9-release-el-${ELV}.noarch.rpm"
+              for repofile in /etc/yum.repos.d/puppet*.repo; do
+                [ -f "$repofile" ] || continue
+                grep -q '^username=' "$repofile" || printf 'username=forge-key\npassword=%s\n' "${FORGE_API_TOKEN}" >> "$repofile"
+                chmod 600 "$repofile"
+              done
+              dnf install -y -q puppet-agent
+              ;;
+          esac
+
+          /opt/puppetlabs/bin/puppet --version
+
+      - name: Real compile check against the installed puppet9 binary
+        run: |
+          set -euo pipefail
+          PUPPET=/opt/puppetlabs/bin/puppet
+          echo ">>> puppet parser validate"
+          "$PUPPET" parser validate manifests/*.pp
+          echo ">>> puppet apply --noop (real catalog compile on real puppet9, real OS facts)"
+          mkdir -p /tmp/modulepath
+          ln -s "$(pwd)" /tmp/modulepath/patchbot
+          "$PUPPET" apply --noop --modulepath=/tmp/modulepath -e "include patchbot"
