@@ -128,13 +128,18 @@ BeforeAll {
     }
 }
 
-AfterEach {
-    Remove-Item Env:\PT_patch_ids -ErrorAction SilentlyContinue
-    Remove-Item Env:\PT_security_only -ErrorAction SilentlyContinue
-    Remove-Item Env:\PT_reboot -ErrorAction SilentlyContinue
-}
-
 Describe 'patch.ps1' {
+    # Pester 5 requires per-test AfterEach/BeforeEach to live inside a
+    # Describe/Context block -- "Each test Teardown is not supported in
+    # root (directly in the block container)" if placed at file scope like
+    # BeforeAll/AfterAll can be. Authored blind (no local pwsh) in an
+    # earlier session; this placement is the first real Pester run of this
+    # file, on real Windows CI.
+    AfterEach {
+        Remove-Item Env:\PT_patch_ids -ErrorAction SilentlyContinue
+        Remove-Item Env:\PT_security_only -ErrorAction SilentlyContinue
+        Remove-Item Env:\PT_reboot -ErrorAction SilentlyContinue
+    }
 
     Context 'Test-IsSecurityUpdate (pure function)' {
         It 'returns $true when MsrcSeverity is set' {

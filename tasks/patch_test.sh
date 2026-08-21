@@ -73,15 +73,28 @@ make_pm_stub apt-get SHIM_APT_FAIL
 
 # TEST_PATH includes the shim dir first, then the real jq's directory (so
 # patch.sh's jq-presence/parse checks keep working against a real jq), then
-# a minimal system PATH WITHOUT dnf/yum/apt-get from the real system (this
-# host has none of those, being macOS, so no exclusion needed beyond not
-# adding them).
+# a minimal system PATH for anything else patch.sh's shell built-ins might
+# need. SHIMDIR is first specifically so the apt-get shim always wins over
+# whatever the real host provides.
 JQ_DIR=$(dirname "$REAL_JQ")
 TEST_PATH="$SHIMDIR:$JQ_DIR:/usr/bin:/bin"
 
-# NOPM_PATH: a PATH with none of apt-get/dnf/yum present, but jq still
-# reachable (for case 5: "no supported package manager").
-NOPM_PATH="$JQ_DIR:/usr/bin:/bin"
+# NOPM_PATH: a PATH with jq reachable but NO real package manager reachable
+# at all -- for case 5: "no supported package manager". This must NOT
+# include /usr/bin or /bin: on a real Debian/Ubuntu/RedHat CI runner those
+# dirs contain a genuine apt-get/dnf/yum, so "just don't add the shim dir"
+# (the previous approach here) silently found the *real* apt-get on Linux
+# even though it correctly found nothing on macOS -- a real bug this test
+# harness shipped with, only caught once it ran on a real Linux CI runner
+# instead of this macOS dev machine. NOPM_DIR is a from-scratch directory
+# containing only a jq symlink, so no PATH entry can resolve to a real
+# package manager on any platform.
+REAL_SH=$(command -v sh) || fail "no real sh on PATH to reference"
+NOPM_DIR="$WORK/nopm"
+mkdir -p "$NOPM_DIR" || fail "could not create nopm dir"
+ln -s "$REAL_JQ" "$NOPM_DIR/jq" || fail "could not symlink jq into nopm dir"
+ln -s "$REAL_SH" "$NOPM_DIR/sh" || fail "could not symlink sh into nopm dir"
+NOPM_PATH="$NOPM_DIR"
 
 run_patch() {
   # shellcheck disable=SC2086
