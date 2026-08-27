@@ -1,13 +1,26 @@
 source ENV['GEM_SOURCE'] || 'https://rubygems.org'
 
 group :test do
-  gem 'voxpupuli-test', '~> 14.0',  :require => false
   gem 'puppet_metadata', '~> 6.1',  :require => false
 end
 
 group :development do
   gem 'guard-rake',               :require => false
   gem 'overcommit', '>= 0.39.1',  :require => false
+end
+
+# voxpupuli-test provides `voxpupuli/test/spec_helper`, required by
+# spec/spec_helper.rb, which is in turn required by every spec file --
+# spec/classes, spec/defines, spec/functions AND spec/acceptance (e.g.
+# spec/acceptance/patch_spec.rb does `require 'spec_helper'` at the top).
+# gha-puppet's reusable beaker.yml workflow (voxpupuli/gha-puppet@v4) runs
+# the `unit` job with BUNDLE_WITHOUT=development:system_tests:release and
+# the `acceptance` job with BUNDLE_WITHOUT=development:test:release -- so
+# voxpupuli-test (and the puppet/openvox gem below) must live in a group
+# that survives BOTH exclusions, i.e. must be a member of *both* :test and
+# :system_tests, not just :test.
+group :test, :system_tests do
+  gem 'voxpupuli-test', '~> 14.0',  :require => false
 end
 
 group :system_tests do
@@ -45,9 +58,9 @@ gem 'rake', :require => false
 # CI's openvox9 dependency-resolution job is best-effort/continue-on-error
 # rather than required -- see .github/workflows/ci.yml.
 if ENV['PUPPET_GEM_VERSION']
-  gem 'puppet', ENV['PUPPET_GEM_VERSION'], :require => false, :groups => [:test]
+  gem 'puppet', ENV['PUPPET_GEM_VERSION'], :require => false, :groups => [:test, :system_tests]
 else
-  gem 'openvox', ENV.fetch('OPENVOX_GEM_VERSION', [">= 8", "< 10"]), :require => false, :groups => [:test]
+  gem 'openvox', ENV.fetch('OPENVOX_GEM_VERSION', [">= 8", "< 10"]), :require => false, :groups => [:test, :system_tests]
 end
 
 # vim: syntax=ruby
