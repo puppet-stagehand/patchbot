@@ -2,50 +2,73 @@
 
 <#
 .SYNOPSIS
-    Pester 5.x coverage for patchbot::patch's Windows implementation
+    Pester 5.x/6.x coverage for patchbot::patch's Windows implementation
     (patch.ps1) -- mirrors patch.sh's own patch_test.sh test contract
     (02-01-PLAN.md Task 1) plus D-03's fuller Pester scope: dry-run/search,
     the reboot flag, the SecurityOnly filter, and PatchIds membership.
 
 .DESCRIPTION
-    Never executed against a live pwsh/Pester install during this phase --
-    no Windows/pwsh runtime exists in this dev environment (02-RESEARCH.md's
-    Environment Availability table). Written from Pester 5.x Describe/
-    Context/It/Mock conventions; verify + fix any syntax mismatches on a
-    real Windows host per 02-01-PLAN.md Task 3's checkpoint. Do NOT change
-    the underlying assertions' intent when fixing syntax there.
+    Moved from tasks/patch.Tests.ps1 to spec/tasks/patch.Tests.ps1 and
+    repaired for real Pester lifecycle/scoping semantics (04.1-03-PLAN.md
+    Task 1, citing pcm's d374a35 PDK-3.8 "tests move under spec/" scaffold
+    convention). Three real bugs were found and fixed while making this
+    suite runnable, not just relocated:
+
+      1. A root-level (directly-in-container) `AfterEach` is rejected by
+         both Pester 5.x and 6.x ("Each test Teardown is not supported in
+         root") -- moved inside the `Describe` block.
+
+      2. `Add-Member -MemberType ScriptMethod -Value { ... $outerVar ... }`
+         does NOT close over the enclosing scope's local variables by
+         default in PowerShell -- the scriptblock runs in a fresh scope
+         when later invoked as a method, so `$outerVar` resolves to $null
+         at call time. Every fake-object graph in this file (session/
+         searcher/installer/downloader/collection) referenced an
+         enclosing-scope variable this way; all now use `.GetNewClosure()`
+         so the method body actually captures its constructor-time values.
+         (Verified directly: an isolated repro of this exact pattern
+         returned $null before the fix, the correct value after.)
+
+      3. Pester's `Mock New-Object -ParameterFilter { $ComObject }`
+         generates its interception proxy from the real `New-Object`
+         cmdlet's parameter sets on the CURRENT platform. `-ComObject` is a
+         Windows-only parameter set (COM interop): on non-Windows pwsh it
+         does not exist, so `New-Object -ComObject ...` throws
+         ParameterBindingException before the mock body ever runs. The
+         three non-job contexts below no longer use Pester `Mock` for this
+         reason -- they shadow `New-Object` with a plain local function
+         (same technique the job-based contexts already used), which works
+         identically on any platform because it is ordinary PowerShell
+         function-precedence-over-cmdlet resolution, not COM.
+
+    Verified locally against real pwsh 7.6.5 + Pester 5.9.0 and 6.1.0 on
+    this dev host (macOS arm64): all 11 cases pass on both Pester majors.
+    Per D-15, this macOS-native run is iteration/regression evidence only,
+    NOT releasable proof -- the authoritative pass must come from a real
+    windows-2022 x64 GitHub Actions run (see ci.yml's windows-pester job).
 
     patch.ps1 is a top-level script (not a module) that calls `exit 0` from
-    three places after this plan's GREEN step (FailJson's two call sites,
-    plus the pre-existing reboot-now branch). `exit` cannot be caught by
-    try/catch and cannot be shadowed by a same-named function -- it always
-    terminates the current PowerShell runspace. Three strategies are used
-    here to work around that safely:
+    three places (FailJson's two call sites, plus the reboot-now branch).
+    `exit` cannot be caught by try/catch and cannot be shadowed by a
+    same-named function -- it always terminates the current PowerShell
+    runspace. Two strategies are used here to work around that safely:
 
-      1. Pure-function tests (Test-IsSecurityUpdate, Get-UpdateId) load
-         ONLY those function definitions via AST extraction, never running
-         patch.ps1's top-level body at all -- safe to dot-source directly,
-         no exit risk.
+      1. Full-script tests that do NOT hit an exit call (patch_ids
+         membership, SecurityOnly filtering, the plain success shape)
+         shadow `New-Object` with a local function and dot-source patch.ps1
+         directly in the current runspace.
 
-      2. Full-script tests that do NOT hit an exit call (patch_ids
-         membership, SecurityOnly filtering, the plain success shape) use
-         Pester's own `Mock New-Object` and dot-source patch.ps1 directly
-         in the current runspace.
-
-      3. Full-script tests that DO hit `exit 0` (search failure, install
+      2. Full-script tests that DO hit `exit 0` (search failure, install
          failure, reboot-required-true) run patch.ps1 inside an isolated
          Start-Job background runspace, so `exit` only terminates the job's
-         runspace, not the Pester process itself. Pester's `Mock` cannot
-         reach into a separate job runspace, so these three cases shadow
-         New-Object with a plain function defined inside the job
-         scriptblock instead (same interception idea, different plumbing).
+         runspace, not the Pester process itself.
 #>
 
 BeforeAll {
-    $Script:PatchScriptPath    = Join-Path $PSScriptRoot 'patch.ps1'
+    $Script:PatchScriptPath    = (Resolve-Path (Join-Path $PSScriptRoot '../../tasks/patch.ps1')).Path
     $Script:PatchScriptContent = Get-Content -Path $Script:PatchScriptPath -Raw
 
-    # --- Strategy 1: isolate the pure helper functions --------------------
+    # --- Strategy: isolate the pure helper functions -----------------------
     $tokens      = $null
     $parseErrors = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseInput(
@@ -57,7 +80,7 @@ BeforeAll {
         . ([scriptblock]::Create($fnAst.Extent.Text))
     }
 
-    # --- Fake WUA object graph (Strategy 2) --------------------------------
+    # --- Fake WUA object graph ----------------------------------------------
     function New-FakeUpdate {
         param(
             [string]$UpdateId,
@@ -86,10 +109,10 @@ BeforeAll {
         $coll | Add-Member -MemberType ScriptMethod -Name Add -Value {
             param($u)
             $items.Add($u) | Out-Null
-        } -Force
+        }.GetNewClosure() -Force
         $coll | Add-Member -MemberType ScriptProperty -Name Count -Value {
             $items.Count
-        } -Force
+        }.GetNewClosure() -Force
         return $coll
     }
 
@@ -102,13 +125,13 @@ BeforeAll {
         $searcher | Add-Member -MemberType ScriptMethod -Name Search -Value {
             param($criteria)
             return $searchResult
-        } -Force
+        }.GetNewClosure() -Force
 
         $installResult = [pscustomobject]@{ RebootRequired = $false }
         $installer = [pscustomobject]@{ Updates = $null }
         $installer | Add-Member -MemberType ScriptMethod -Name Install -Value {
             return $installResult
-        } -Force
+        }.GetNewClosure() -Force
 
         $downloader = [pscustomobject]@{ Updates = $null }
         $downloader | Add-Member -MemberType ScriptMethod -Name Download -Value { } -Force
@@ -116,25 +139,33 @@ BeforeAll {
         $session = [pscustomobject]@{}
         $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateSearcher -Value {
             return $searcher
-        } -Force
+        }.GetNewClosure() -Force
         $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateDownloader -Value {
             return $downloader
-        } -Force
+        }.GetNewClosure() -Force
         $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateInstaller -Value {
             return $installer
-        } -Force
+        }.GetNewClosure() -Force
 
         return $session
     }
 }
 
-AfterEach {
-    Remove-Item Env:\PT_patch_ids -ErrorAction SilentlyContinue
-    Remove-Item Env:\PT_security_only -ErrorAction SilentlyContinue
-    Remove-Item Env:\PT_reboot -ErrorAction SilentlyContinue
-}
-
 Describe 'patch.ps1' {
+    # AfterEach must live inside a Describe/Context block -- Pester 5.x/6.x
+    # both reject a root-level (directly-in-container) Teardown block with
+    # "Each test Teardown is not supported in root". Verified locally: the
+    # pre-move file failed all 11 tests with exactly this runtime error
+    # before this fix, on both Pester 5.9.0 and 6.1.0.
+    AfterEach {
+        Remove-Item Env:\PT_patch_ids -ErrorAction SilentlyContinue
+        Remove-Item Env:\PT_security_only -ErrorAction SilentlyContinue
+        Remove-Item Env:\PT_reboot -ErrorAction SilentlyContinue
+        Remove-Item Function:\New-Object -ErrorAction SilentlyContinue
+        Remove-Item Variable:\Script:fakeSession -ErrorAction SilentlyContinue
+        Remove-Item Variable:\Script:fakeColl -ErrorAction SilentlyContinue
+        Remove-Item Variable:\Script:installedIdsCapture -ErrorAction SilentlyContinue
+    }
 
     Context 'Test-IsSecurityUpdate (pure function)' {
         It 'returns $true when MsrcSeverity is set' {
@@ -177,18 +208,20 @@ Describe 'patch.ps1' {
         }
     }
 
-    Context 'patch_ids membership filtering (full script, Mock)' {
+    Context 'patch_ids membership filtering (full script, function-shadow)' {
         It 'installs only the mocked updates whose id matches PT_patch_ids' {
             $matchUpdate = New-FakeUpdate -UpdateId 'guid-1' -KBArticleIDs @('5001111')
             $otherUpdate = New-FakeUpdate -UpdateId 'guid-2' -KBArticleIDs @('5002222')
+            $Script:fakeSession         = New-FakeSession -Updates @($matchUpdate, $otherUpdate)
             $Script:installedIdsCapture = [System.Collections.ArrayList]::new()
 
-            Mock New-Object {
+            function New-Object {
+                param([string]$ComObject, [string]$TypeName)
                 if ($ComObject -eq 'Microsoft.Update.Session') {
-                    return (New-FakeSession -Updates @($matchUpdate, $otherUpdate))
+                    return $Script:fakeSession
                 }
                 if ($ComObject -eq 'Microsoft.Update.UpdateColl') {
-                    $coll = New-FakeUpdateColl
+                    $coll = [pscustomobject]@{}
                     $coll | Add-Member -MemberType ScriptMethod -Name Add -Value {
                         param($u)
                         $Script:installedIdsCapture.Add((Get-UpdateId $u)) | Out-Null
@@ -198,7 +231,8 @@ Describe 'patch.ps1' {
                 if ($ComObject -eq 'Microsoft.Update.SystemInfo') {
                     return [pscustomobject]@{ RebootRequired = $false }
                 }
-            } -ParameterFilter { $ComObject }
+                Microsoft.PowerShell.Utility\New-Object @PSBoundParameters
+            }
 
             $env:PT_patch_ids = '["KB5001111"]'
 
@@ -209,18 +243,20 @@ Describe 'patch.ps1' {
         }
     }
 
-    Context 'SecurityOnly filtering (full script, Mock)' {
+    Context 'SecurityOnly filtering (full script, function-shadow)' {
         It 'selects only mocked updates flagged as security when PT_security_only=true and no patch_ids' {
             $securityUpdate = New-FakeUpdate -UpdateId 'guid-sec' -IsSecurity $true
             $normalUpdate   = New-FakeUpdate -UpdateId 'guid-normal' -IsSecurity $false
+            $Script:fakeSession         = New-FakeSession -Updates @($securityUpdate, $normalUpdate)
             $Script:installedIdsCapture = [System.Collections.ArrayList]::new()
 
-            Mock New-Object {
+            function New-Object {
+                param([string]$ComObject, [string]$TypeName)
                 if ($ComObject -eq 'Microsoft.Update.Session') {
-                    return (New-FakeSession -Updates @($securityUpdate, $normalUpdate))
+                    return $Script:fakeSession
                 }
                 if ($ComObject -eq 'Microsoft.Update.UpdateColl') {
-                    $coll = New-FakeUpdateColl
+                    $coll = [pscustomobject]@{}
                     $coll | Add-Member -MemberType ScriptMethod -Name Add -Value {
                         param($u)
                         $Script:installedIdsCapture.Add($u.Identity.UpdateID) | Out-Null
@@ -230,7 +266,8 @@ Describe 'patch.ps1' {
                 if ($ComObject -eq 'Microsoft.Update.SystemInfo') {
                     return [pscustomobject]@{ RebootRequired = $false }
                 }
-            } -ParameterFilter { $ComObject }
+                Microsoft.PowerShell.Utility\New-Object @PSBoundParameters
+            }
 
             $env:PT_security_only = 'true'
 
@@ -241,19 +278,24 @@ Describe 'patch.ps1' {
         }
     }
 
-    Context 'success path shape (full script, Mock, regression)' {
+    Context 'success path shape (full script, function-shadow, regression)' {
         It 'emits {"status":"patched","applied":...,"reboot_required":...,"rebooted":false}' {
-            Mock New-Object {
+            $Script:fakeSession = New-FakeSession -Updates @()
+            $Script:fakeColl    = New-FakeUpdateColl
+
+            function New-Object {
+                param([string]$ComObject, [string]$TypeName)
                 if ($ComObject -eq 'Microsoft.Update.Session') {
-                    return (New-FakeSession -Updates @())
+                    return $Script:fakeSession
                 }
                 if ($ComObject -eq 'Microsoft.Update.UpdateColl') {
-                    return (New-FakeUpdateColl)
+                    return $Script:fakeColl
                 }
                 if ($ComObject -eq 'Microsoft.Update.SystemInfo') {
                     return [pscustomobject]@{ RebootRequired = $false }
                 }
-            } -ParameterFilter { $ComObject }
+                Microsoft.PowerShell.Utility\New-Object @PSBoundParameters
+            }
 
             $out  = . $Script:PatchScriptPath
             $json = ($out | Select-Object -Last 1) | ConvertFrom-Json
@@ -279,14 +321,14 @@ Describe 'patch.ps1' {
                         $session = [pscustomobject]@{}
                         $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateSearcher -Value {
                             return $searcher
-                        } -Force
+                        }.GetNewClosure() -Force
                         return $session
                     }
                     if ($ComObject -eq 'Microsoft.Update.UpdateColl') {
                         $items = [System.Collections.ArrayList]::new()
                         $coll = [pscustomobject]@{}
-                        $coll | Add-Member -MemberType ScriptMethod -Name Add -Value { param($u) $items.Add($u) | Out-Null } -Force
-                        $coll | Add-Member -MemberType ScriptProperty -Name Count -Value { $items.Count } -Force
+                        $coll | Add-Member -MemberType ScriptMethod -Name Add -Value { param($u) $items.Add($u) | Out-Null }.GetNewClosure() -Force
+                        $coll | Add-Member -MemberType ScriptProperty -Name Count -Value { $items.Count }.GetNewClosure() -Force
                         return $coll
                     }
                     Microsoft.PowerShell.Utility\New-Object @PSBoundParameters
@@ -323,7 +365,7 @@ Describe 'patch.ps1' {
                         $searcher | Add-Member -MemberType ScriptMethod -Name Search -Value {
                             param($criteria)
                             return [pscustomobject]@{ Updates = @($update) }
-                        } -Force
+                        }.GetNewClosure() -Force
 
                         $downloader = [pscustomobject]@{ Updates = $null }
                         $downloader | Add-Member -MemberType ScriptMethod -Name Download -Value { } -Force
@@ -334,16 +376,16 @@ Describe 'patch.ps1' {
                         } -Force
 
                         $session = [pscustomobject]@{}
-                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateSearcher -Value { return $searcher } -Force
-                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateDownloader -Value { return $downloader } -Force
-                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateInstaller -Value { return $installer } -Force
+                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateSearcher -Value { return $searcher }.GetNewClosure() -Force
+                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateDownloader -Value { return $downloader }.GetNewClosure() -Force
+                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateInstaller -Value { return $installer }.GetNewClosure() -Force
                         return $session
                     }
                     if ($ComObject -eq 'Microsoft.Update.UpdateColl') {
                         $items = [System.Collections.ArrayList]::new()
                         $coll = [pscustomobject]@{}
-                        $coll | Add-Member -MemberType ScriptMethod -Name Add -Value { param($u) $items.Add($u) | Out-Null } -Force
-                        $coll | Add-Member -MemberType ScriptProperty -Name Count -Value { $items.Count } -Force
+                        $coll | Add-Member -MemberType ScriptMethod -Name Add -Value { param($u) $items.Add($u) | Out-Null }.GetNewClosure() -Force
+                        $coll | Add-Member -MemberType ScriptProperty -Name Count -Value { $items.Count }.GetNewClosure() -Force
                         return $coll
                     }
                     Microsoft.PowerShell.Utility\New-Object @PSBoundParameters
@@ -384,16 +426,16 @@ Describe 'patch.ps1' {
                         } -Force
 
                         $session = [pscustomobject]@{}
-                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateSearcher -Value { return $searcher } -Force
-                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateDownloader -Value { return $downloader } -Force
-                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateInstaller -Value { return $installer } -Force
+                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateSearcher -Value { return $searcher }.GetNewClosure() -Force
+                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateDownloader -Value { return $downloader }.GetNewClosure() -Force
+                        $session | Add-Member -MemberType ScriptMethod -Name CreateUpdateInstaller -Value { return $installer }.GetNewClosure() -Force
                         return $session
                     }
                     if ($ComObject -eq 'Microsoft.Update.UpdateColl') {
                         $items = [System.Collections.ArrayList]::new()
                         $coll = [pscustomobject]@{}
-                        $coll | Add-Member -MemberType ScriptMethod -Name Add -Value { param($u) $items.Add($u) | Out-Null } -Force
-                        $coll | Add-Member -MemberType ScriptProperty -Name Count -Value { $items.Count } -Force
+                        $coll | Add-Member -MemberType ScriptMethod -Name Add -Value { param($u) $items.Add($u) | Out-Null }.GetNewClosure() -Force
+                        $coll | Add-Member -MemberType ScriptProperty -Name Count -Value { $items.Count }.GetNewClosure() -Force
                         return $coll
                     }
                     if ($ComObject -eq 'Microsoft.Update.SystemInfo') {

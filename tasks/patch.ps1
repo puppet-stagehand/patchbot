@@ -104,10 +104,19 @@ if ($candidates.Count -gt 0) {
 
 # Refresh the patchbot external fact cache best-effort so PuppetDB/console
 # see the new posture promptly (the fact also self-reports on the next
-# agent run) — mirrors patch.sh's own best-effort self-refresh.
-$factPath = Join-Path $env:ProgramData 'PuppetLabs\facter\facts.d\patchbot.ps1'
-if (Test-Path $factPath) {
-  try { & $factPath | Out-Null } catch { }
+# agent run) — mirrors patch.sh's own best-effort self-refresh. Guarded
+# end-to-end (including the Join-Path itself, not just the invocation) so
+# a missing/empty $env:ProgramData -- which should never happen on a real
+# Windows host, but did surface as an unhandled terminating error during
+# local macOS Pester iteration -- degrades to a silent no-op instead of
+# aborting the whole task before it can emit its JSON result.
+if ($env:ProgramData) {
+  try {
+    $factPath = Join-Path $env:ProgramData 'PuppetLabs\facter\facts.d\patchbot.ps1'
+    if (Test-Path $factPath) {
+      & $factPath | Out-Null
+    }
+  } catch { }
 }
 
 if ($DoReboot -and $rebootRequired) {

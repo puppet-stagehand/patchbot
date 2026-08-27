@@ -23,3 +23,9 @@
 /Guardfile
 bolt-debug.log
 .rerun.json
+
+# Local-only, not modulesync-managed: Pester -CI output and macOS Finder
+# metadata generated while iterating on spec/tasks/patch.Tests.ps1 locally
+# (04.1-03-PLAN.md Task 1).
+/testResults.xml
+.DS_Store

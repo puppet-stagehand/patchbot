@@ -131,3 +131,34 @@ jobs:
           set -euo pipefail
           echo "openvox9-beta result: ${RESULT}"
           echo "This gate always succeeds -- openvox9 is best-effort/beta and never blocks CI."
+
+  # STAGEHAND-OWNED, NOT MODULESYNC-MANAGED (see ci.yml header for the
+  # DEVIATION FROM UPSTREAM pattern this repo already uses for
+  # matrix.collection/openvox9-beta). D-15 requires the complete supported
+  # Pester suite to pass on a real Windows x86_64 runner before Patchbot is
+  # releasable -- static inspection, a partial pass, or a macOS-native run
+  # are explicitly NOT sufficient evidence. This job is blocking: no
+  # continue-on-error, no experimental carve-out. 04.1-03-PLAN.md Task 1
+  # (citing pcm's d374a35 PDK-3.8 "tests move under spec/" convention for
+  # the spec/tasks/patch.Tests.ps1 path this job runs).
+  windows-pester:
+    name: Windows Pester (patch.ps1, native x64, D-15)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install pinned Pester (5.9.0)
+        shell: pwsh
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module -Name Pester -RequiredVersion 5.9.0 -Force -SkipPublisherCheck -Scope CurrentUser
+
+      - name: Invoke-Pester -- complete supported suite must fully pass, no waivers
+        shell: pwsh
+        run: |
+          Import-Module Pester -RequiredVersion 5.9.0 -Force
+          $result = Invoke-Pester -Path ./spec/tasks/patch.Tests.ps1 -CI -PassThru
+          if ($result.FailedCount -gt 0) {
+            Write-Error "Pester reported $($result.FailedCount) failing case(s) on native Windows x64 -- D-15 forbids waiving any."
+            exit 1
+          }
