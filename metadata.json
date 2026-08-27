@@ -1,6 +1,6 @@
 {
   "name": "stagehand-patchbot",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "stagehand",
   "summary": "Patch posture reporting (pull-path fact) and OS package patching (push-path Bolt task) for the Puppet Stagehand Console.",
   "license": "Apache-2.0",
