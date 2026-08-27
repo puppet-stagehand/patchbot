@@ -46,6 +46,7 @@ ARGV_LOG="$WORK/argv.log"
 export ARGV_LOG
 
 REAL_JQ=$(command -v jq) || fail "no real jq on PATH to reference"
+REAL_SH=$(command -v sh) || fail "no real sh on PATH to reference"
 
 # make_pm_stub NAME FAIL_FLAG_VAR
 # Writes a PATH shim for NAME that logs "NAME <argv>" to ARGV_LOG. If
@@ -79,9 +80,21 @@ make_pm_stub apt-get SHIM_APT_FAIL
 JQ_DIR=$(dirname "$REAL_JQ")
 TEST_PATH="$SHIMDIR:$JQ_DIR:/usr/bin:/bin"
 
-# NOPM_PATH: a PATH with none of apt-get/dnf/yum present, but jq still
-# reachable (for case 5: "no supported package manager").
-NOPM_PATH="$JQ_DIR:/usr/bin:/bin"
+# NOPM_PATH: a PATH guaranteed to contain none of apt-get/dnf/yum, for
+# case 5 ("no supported package manager"). Simply omitting /usr/bin and
+# /bin from the PATH string is NOT sufficient isolation: on this
+# macOS dev host neither directory holds a package manager, but on the
+# ubuntu-latest CI runner /usr/bin/apt-get is real, so a PATH built from
+# "$JQ_DIR:/usr/bin:/bin" (as this used to read) still resolves apt-get
+# there and the test observes the real binary instead of its simulated
+# absence. patch.sh's no-package-manager branch (fail_json path) uses only
+# shell builtins (command -v, printf, exit) and never invokes jq, so an
+# empty, dedicated, guaranteed-apt/dnf/yum-free directory is both
+# sufficient and safe here -- no real system directory is trustworthy for
+# "definitely does not contain a package manager" across platforms.
+NOPM_DIR="$WORK/nopm"
+mkdir -p "$NOPM_DIR" || fail "could not create nopm dir"
+NOPM_PATH="$NOPM_DIR"
 
 run_patch() {
   # shellcheck disable=SC2086
@@ -164,8 +177,12 @@ make_pm_stub apt-get SHIM_APT_FAIL
 info "case 4 (apt-get dist-upgrade failure): OK (embedded JSON error, exit 0)"
 
 # --- Case 5: no supported package manager on PATH -> embedded JSON error, exit 0. ---
+# `sh` is invoked by its resolved absolute path ($REAL_SH), not a bare
+# "sh" name, so `env` doesn't need to look it up via NOPM_PATH (which is
+# deliberately empty) -- only patch.sh's own internal `command -v
+# apt-get`/`dnf`/`yum` lookups should see the empty PATH.
 reset
-OUT=$(env -i PATH="$NOPM_PATH" HOME="$HOME" sh "$TARGET_SH")
+OUT=$(env -i PATH="$NOPM_PATH" HOME="$HOME" "$REAL_SH" "$TARGET_SH")
 RC=$?
 [ "$RC" -eq 0 ] || fail "case 5 (no package manager): expected exit 0, got $RC. stdout: $OUT"
 [ "$OUT" = '{"status": "error", "error": "no supported package manager (apt/dnf/yum) found"}' ] \
