@@ -23,6 +23,21 @@ RSpec.describe 'patchbot::patch (POSIX, target-native acceptance)' do
   let(:repo_root) { File.expand_path('../..', __dir__) }
   let(:task_sh) { File.join(repo_root, 'tasks', 'patch.sh') }
 
+  # Ruby's backtick (Kernel#`) only routes through a real shell (/bin/sh)
+  # when the command string contains shell metacharacters. "command -v jq"
+  # has none, so Ruby's Process.spawn optimization execs a literal binary
+  # named "command" directly -- which doesn't exist as a standalone
+  # executable ("command" is a shell builtin, not a PATH entry) and raises
+  # Errno::ENOENT on Linux (this went unnoticed locally on macOS purely by
+  # environmental accident, not because the code was actually shell-safe).
+  # Wrapping in `sh -c '...'` forces the builtin to run inside a real
+  # shell, matching the `command -v` idiom already used throughout this
+  # module's own task scripts (see tasks/patch.sh's jq/apt-get/dnf/yum
+  # detection) instead of introducing a `which` dependency.
+  def real_jq_dir
+    File.dirname(`sh -c 'command -v jq'`.strip)
+  end
+
   def with_apt_stub(work_dir, fail: false)
     shim_dir = File.join(work_dir, 'shims')
     FileUtils.mkdir_p(shim_dir)
@@ -49,7 +64,6 @@ RSpec.describe 'patchbot::patch (POSIX, target-native acceptance)' do
 
   it 'runs the real patch.sh subprocess end-to-end and emits parseable compliant JSON on success' do
     shim_dir = with_apt_stub(@work_dir, fail: false)
-    real_jq_dir = File.dirname(`command -v jq`.strip)
 
     stdout, stderr, status = run_task(
       'PATH' => "#{shim_dir}:#{real_jq_dir}:/usr/bin:/bin",
@@ -73,7 +87,6 @@ RSpec.describe 'patchbot::patch (POSIX, target-native acceptance)' do
 
   it 'runs the real patch.sh subprocess end-to-end and emits parseable error JSON when the package manager fails' do
     shim_dir = with_apt_stub(@work_dir, fail: true)
-    real_jq_dir = File.dirname(`command -v jq`.strip)
 
     stdout, stderr, status = run_task(
       'PATH' => "#{shim_dir}:#{real_jq_dir}:/usr/bin:/bin",
@@ -91,7 +104,6 @@ RSpec.describe 'patchbot::patch (POSIX, target-native acceptance)' do
 
   it 'rejects an argument-injection patch_id before ever invoking the package manager' do
     shim_dir = with_apt_stub(@work_dir, fail: false)
-    real_jq_dir = File.dirname(`command -v jq`.strip)
 
     stdout, stderr, status = run_task(
       'PATH' => "#{shim_dir}:#{real_jq_dir}:/usr/bin:/bin",
