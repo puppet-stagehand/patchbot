@@ -1,0 +1,32 @@
+title = "patchbot gitleaks config"
+
+# Extend, never replace, gitleaks' default rule set -- this repo has no
+# secret-shape peculiarities that need a bespoke ruleset, and hand-rolling
+# rules from scratch is how real regressions slip past a scan that looks
+# green.
+[extend]
+useDefault = true
+
+# --- Waivers ---------------------------------------------------------------
+# gitleaks' [[allowlist]] mechanism has no built-in expiry, so this repo's
+# convention (matching tools/supplychain/scan.sh's dated/owned/scoped
+# waivers, and puppet-console's Go supply-chain gate) is enforced by
+# review, not tooling: every entry below MUST be preceded by a comment
+# giving owner/reason/expires, scoped as tightly as possible (a specific
+# `paths` regex and/or `regexes` match, never a blanket rule/path
+# disable). An expired entry is a leftover exception, not a live one --
+# remove it (don't just let it sit) once its date passes; CI does not
+# currently enforce the expiry automatically, so this depends on whoever
+# reviews a PR touching this file catching a stale one.
+#
+# Example (do not uncomment without a real justification):
+# # WAIVER: owner=<github-handle> reason=<why this is not a real secret>
+# # expires=YYYY-MM-DD
+# [[allowlist]]
+# paths = ['''^tests/fixture_with_a_test_only_lookalike\.sh$''']
+# regexes = ['''fixture-only pattern, not a real credential''']
+#
+# No entries below this line as of 2026-08-21 -- both a full-history and a
+# working-tree gitleaks scan came back clean (see RELEASE.md). Add one
+# here only when a real false positive shows up, with a real
+# owner/reason/expires -- not preemptively.

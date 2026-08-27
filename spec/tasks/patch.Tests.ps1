@@ -103,6 +103,20 @@ BeforeAll {
         return $update
     }
 
+    # NOTE on .GetNewClosure(): a scriptblock passed to Add-Member
+    # -MemberType ScriptMethod/ScriptProperty does NOT lexically capture
+    # its enclosing function's local variables by default in PowerShell --
+    # once the defining function returns, a plain `{ return $searcher }`
+    # resolves $searcher as $null at invocation time (it's out of scope),
+    # not the value that was live when Add-Member ran. .GetNewClosure()
+    # snapshots the current variable scope into the scriptblock, making it
+    # a real closure. Every ScriptMethod/ScriptProperty below that
+    # references an outer-scope variable needs it; ones with a literal
+    # body (empty, or a bare `throw '...'`) don't. This was the actual
+    # root cause behind every failure the first real CI run surfaced here
+    # (mocked WUA objects silently returning $null from their own
+    # methods) -- authored blind, never run against real Pester before.
+
     function New-FakeUpdateColl {
         $items = [System.Collections.ArrayList]::new()
         $coll = [pscustomobject]@{}

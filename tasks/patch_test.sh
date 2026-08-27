@@ -74,9 +74,9 @@ make_pm_stub apt-get SHIM_APT_FAIL
 
 # TEST_PATH includes the shim dir first, then the real jq's directory (so
 # patch.sh's jq-presence/parse checks keep working against a real jq), then
-# a minimal system PATH WITHOUT dnf/yum/apt-get from the real system (this
-# host has none of those, being macOS, so no exclusion needed beyond not
-# adding them).
+# a minimal system PATH for anything else patch.sh's shell built-ins might
+# need. SHIMDIR is first specifically so the apt-get shim always wins over
+# whatever the real host provides.
 JQ_DIR=$(dirname "$REAL_JQ")
 TEST_PATH="$SHIMDIR:$JQ_DIR:/usr/bin:/bin"
 
