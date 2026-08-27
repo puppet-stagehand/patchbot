@@ -1,37 +1,25 @@
 ---
-# Managed by modulesync - DO NOT EDIT
-# https://voxpupuli.org/docs/updating-files-managed-with-modulesync/
+# STAGEHAND-OWNED, NOT MODULESYNC-MANAGED. This file was originally the
+# stock modulesync-generated dependency-resolution-only workflow (matching
+# every other split module pre-04.1-03); it has been normalized here to the
+# same blocking-fan-in shape puppet-stagehand/stagehand's own ci.yml
+# already proved (04.1-02), extended with patchbot's task-only/Windows-
+# specific needs (04.1-03-PLAN.md Task 2, D-16). A future modulesync run
+# would revert this file to the dependency-resolution-only shape -- if that
+# happens, re-apply this normalization (lint/unit-test/task-tests/
+# acceptance/windows-pester/security-scan/pdk-build-and-package/reference-
+# drift jobs, immutable action SHAs, contents:read) the same way
+# patchbot-puppet9-acceptance.yml/patchbot-security.yml's own headers
+# already document for their pieces.
 #
-# DEVIATION FROM UPSTREAM (puppet-stagehand/patchbot): the `matrix.collection`
-# list below and the `openvox9-beta` job are hand-maintained for this module
-# and will be reverted by the next modulesync run, same as every other
-# stagehand-owned deviation in this repo (see
-# patchbot-puppet9-acceptance.yml/patchbot-security.yml headers). Re-apply
-# this comment block and the two edits below after any modulesync sync that
-# touches this file. Rationale:
-#   - puppet7/puppet8/openvox8 are the real, GA collections this module
-#     declares support for (metadata.json requirements: puppet >= 7.0.0 <
-#     9.0.0, openvox >= 8.0.0 < 10.0.0).
-#   - puppet9 has no puppet gem yet (rubygems.org tops out at 8.10.0) and
-#     has no `beaker_collection` value in voxpupuli/gha-puppet's beaker.yml@v4
-#     (which only knows puppet7, puppet8, openvox7, openvox8, staging), so it
-#     cannot run through this dependency-resolution job at all yet. Its
-#     unit-test coverage comes from the auto-generated `unit` job matrix
-#     (metadata2gha reads metadata.json's puppet requirement -- puppet 7/8
-#     are the gems that exist) and its real-package acceptance path lives in
-#     patchbot-puppet9-acceptance.yml (WIRED, NOT ARMED; see that file's
-#     header).
-#   - openvox9 DOES have a real gem (through 9.0.0.pre.beta2) and a real
-#     (beta) apt/yum repo, so it is included below as a best-effort,
-#     continue-on-error job rather than silently ignored or folded into the
-#     required matrix. Locally, `bundle install` with an openvox >= 8.24
-#     constraint (which covers every current 9.x prerelease) reliably fails
-#     to resolve while the :system_tests group (puppet_litmus -> bolt) is in
-#     the same Gemfile -- openvox >= 8.24.0 needs puppet-resource_api ~> 2.0,
-#     bolt's puppet dependency chain still needs the ~> 1.5-compatible line.
-#     See Gemfile's header comment for the full explanation. That is exactly
-#     why this job is continue-on-error rather than required: a real,
-#     structural, upstream ecosystem conflict, not a bug in this module.
+# Blocking vs experimental, per D-16: puppet7/puppet8/openvox8 are the
+# real, GA collections this module declares support for (metadata.json
+# requirements: puppet >= 7.0.0 < 9.0.0, openvox >= 8.0.0 < 10.0.0) and
+# block the PR. puppet9 has no puppet gem yet (rubygems.org tops out at
+# 8.10.0); openvox9 exists only as a beta prerelease. Both remain
+# explicitly named, non-blocking, best-effort legs until a stable
+# toolchain exists -- never silently folded into the required matrix, and
+# never silently dropped either.
 name: CI
 
 # yamllint disable-line rule:truthy
@@ -75,7 +63,207 @@ permissions:
   contents: read
 
 jobs:
-  puppet:
+  security-scan:
+    name: Security
+    uses: ./.github/workflows/patchbot-security.yml
+
+  lint:
+    name: Lint / validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
+        with:
+          ruby-version: "3.2"
+          bundler-cache: true
+
+      - name: puppet-lint + syntax + metadata-json-lint
+        run: bundle exec rake validate lint metadata_lint
+
+  unit-test:
+    name: rspec-puppet (${{ matrix.label }})
+    needs: lint
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Real, resolvable releases -- these block the PR.
+          - label: "Puppet Core 7"
+            gem_name: puppet
+            gem_version: "~> 7.0"
+            ruby_version: "3.2"
+            experimental: false
+          - label: "Puppet Core 8"
+            gem_name: puppet
+            gem_version: "~> 8.0"
+            ruby_version: "3.2"
+            experimental: false
+          - label: "OpenVox 8"
+            gem_name: openvox
+            gem_version: "~> 8.0"
+            ruby_version: "3.2"
+            experimental: false
+          # Puppet 9 has not shipped on RubyGems yet -- real leg, wired in,
+          # can only start passing once Puppet 9 actually ships (see this
+          # file's header and patchbot-puppet9-acceptance.yml for the real-
+          # package compile-check path).
+          - label: "Puppet Core 9 (experimental -- not yet released)"
+            gem_name: puppet
+            gem_version: "~> 9.0"
+            ruby_version: "3.2"
+            experimental: true
+          # OpenVox 9 exists only as a pre-release -- forward-compat
+          # signal, not a support commitment.
+          - label: "OpenVox 9 (experimental -- pre-release)"
+            gem_name: openvox
+            gem_version: ">= 9.0.0.beta1"
+            ruby_version: "3.2"
+            experimental: true
+    continue-on-error: ${{ matrix.experimental }}
+    env:
+      CI_PUPPET_GEM_NAME: ${{ matrix.gem_name }}
+      CI_PUPPET_GEM_VERSION: ${{ matrix.gem_version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
+        with:
+          ruby-version: ${{ matrix.ruby_version }}
+
+      - name: bundle install (fresh per matrix leg)
+        # Each leg resolves its own gem graph for CI_PUPPET_GEM_NAME/
+        # VERSION -- the committed local Gemfile.lock (gitignored, dev-
+        # machine only) is never touched here.
+        run: |
+          rm -f Gemfile.lock
+          bundle install --jobs 4 --retry 3
+
+      - name: rspec-puppet (catalog + task metadata/behavior contracts)
+        # fixtures:prep installs .fixtures.yml's declared dependencies
+        # (none currently). Scoped to classes/unit -- spec/acceptance is
+        # covered by its own job below since it exercises a real
+        # subprocess, not a Puppet catalog, and does not need to run once
+        # per Puppet-version leg.
+        run: |
+          bundle exec rake fixtures:prep
+          bundle exec rspec --pattern 'spec/{classes,defines,functions,hosts,unit}/**/*_spec.rb'
+
+  acceptance:
+    name: Acceptance (target-native, real subprocess)
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
+        with:
+          ruby-version: "3.2"
+          bundler-cache: true
+
+      - name: rspec (spec/acceptance -- real patch.sh subprocess, real jq, no Puppet-version dependence)
+        run: bundle exec rspec spec/acceptance
+
+  task-tests:
+    name: Bolt task shell tests
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Run tasks/*_test.sh and tests/*.sh
+        run: |
+          set -eu
+          status=0
+          for t in tasks/*_test.sh tests/*.sh; do
+            [ -f "$t" ] || continue
+            echo "== $t =="
+            sh "$t" || status=1
+          done
+          exit "$status"
+
+  # STAGEHAND-OWNED. D-15 requires the complete supported Pester suite to
+  # pass on a real Windows x86_64 runner before Patchbot is releasable --
+  # static inspection, a partial pass, or a macOS-native run are explicitly
+  # NOT sufficient evidence. Blocking: no continue-on-error, no
+  # experimental carve-out.
+  windows-pester:
+    name: Windows Pester (patch.ps1, native x64, D-15)
+    needs: lint
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install pinned Pester (5.9.0)
+        shell: pwsh
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module -Name Pester -RequiredVersion 5.9.0 -Force -SkipPublisherCheck -Scope CurrentUser
+
+      - name: Invoke-Pester -- complete supported suite must fully pass, no waivers
+        shell: pwsh
+        run: |
+          Import-Module Pester -RequiredVersion 5.9.0 -Force
+          $result = Invoke-Pester -Path ./spec/tasks/patch.Tests.ps1 -CI -PassThru
+          if ($result.FailedCount -gt 0) {
+            Write-Error "Pester reported $($result.FailedCount) failing case(s) on native Windows x64 -- D-15 forbids waiving any."
+            exit 1
+          }
+
+  # STAGEHAND-OWNED. FORGE-01: `pdk build` packages metadata.json + the
+  # module's declared files into an installable tarball independent of
+  # `pdk validate`'s compatibility gate (see reference-drift job's sibling
+  # note below on why `pdk validate` itself is NOT wired in here yet).
+  # Inspects the resulting tarball's name/version/file manifest so a
+  # malformed or incomplete package fails CI instead of only surfacing at
+  # publish time.
+  pdk-build-and-package:
+    name: PDK build + package inspection (FORGE-01)
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: pdk build
+        run: pdk build --force
+
+      - name: Inspect built package (name, version, expected file manifest)
+        run: |
+          set -eu
+          name=$(jq -r '.name' metadata.json)
+          version=$(jq -r '.version' metadata.json)
+          pkg="pkg/${name}-${version}.tar.gz"
+          [ -f "$pkg" ] || { echo "::error::expected package not found: $pkg"; exit 1; }
+          echo ">>> package: $pkg"
+          sha256sum "$pkg"
+          echo ">>> manifest:"
+          tar tzf "$pkg" | sed -n '1,50p'
+          tar tzf "$pkg" | grep -q "${name}-${version}/metadata.json" \
+            || { echo "::error::package is missing metadata.json at its expected path"; exit 1; }
+          tar tzf "$pkg" | grep -q "${name}-${version}/tasks/patch.json" \
+            || { echo "::error::package is missing tasks/patch.json"; exit 1; }
+
+  # POLISH-03: REFERENCE.md must be generated, committed, and never allowed
+  # to silently drift from the manifests/tasks it documents.
+  reference-drift:
+    name: REFERENCE.md drift gate (POLISH-03)
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
+        with:
+          ruby-version: "3.2"
+          bundler-cache: true
+
+      - name: Regenerate REFERENCE.md and fail on drift
+        run: |
+          bundle exec puppet strings generate --format markdown
+          git diff --exit-code -- REFERENCE.md
+
+  package-resolution:
     name: ${{ matrix.collection }} dependency resolution
     strategy:
       fail-fast: false
@@ -91,25 +279,17 @@ jobs:
       beaker_staging_version: ${{ inputs.beaker_staging_version }}
 
   # Best-effort/beta: openvox9 has a real gem (through 9.0.0.pre.beta2) and a
-  # real apt/yum repo (openvox9, live since 2026-07-15), but upstream OpenVox
-  # itself calls that repo "beta" and explicitly advises against production
-  # use, and voxpupuli/gha-puppet's beaker.yml@v4 does not document openvox9
-  # as a supported `beaker_collection` value (only puppet7, puppet8, openvox7,
-  # openvox8, staging are documented). This job is therefore kept OUT of the
-  # required `puppet` matrix above. Promote it into the main matrix once
-  # gha-puppet documents openvox9 and/or upstream OpenVox calls openvox9 GA.
+  # real (beta) apt/yum repo, but upstream OpenVox itself calls that repo
+  # "beta" and voxpupuli/gha-puppet's beaker.yml@v4 does not document
+  # openvox9 as a supported `beaker_collection` value. Kept OUT of the
+  # required `package-resolution` matrix above; promote once gha-puppet
+  # documents openvox9 and/or upstream OpenVox calls openvox9 GA.
   #
-  # NOTE on "best-effort": `continue-on-error` is NOT a valid key on a job
-  # that calls a reusable workflow via `uses:` -- GitHub Actions only allows
-  # name/uses/with/secrets/needs/if/permissions on such jobs (confirmed with
-  # `actionlint`; adding it here would make this file fail GitHub's own
-  # workflow parser, not just fail silently). So "best-effort" here is
-  # enforced the GitHub-supported way instead: this job is deliberately left
-  # OUT of any required branch-protection status checks, and the
-  # `openvox9-beta-gate` job below always succeeds and is what any required
-  # check should point at, regardless of whether openvox9-beta itself went
-  # red. The underlying job's own pass/fail is still visible in the PR
-  # checks list for anyone who wants to look.
+  # `continue-on-error` is NOT a valid key on a job that calls a reusable
+  # workflow via `uses:` (confirmed with actionlint), so "best-effort" is
+  # enforced via the always-succeeding `openvox9-beta-gate` job instead --
+  # any required branch-protection check should point at the gate, not at
+  # openvox9-beta itself.
   openvox9-beta:
     name: openvox9 dependency resolution (beta, best-effort)
     uses: voxpupuli/gha-puppet/.github/workflows/beaker.yml@v4
@@ -131,34 +311,3 @@ jobs:
           set -euo pipefail
           echo "openvox9-beta result: ${RESULT}"
           echo "This gate always succeeds -- openvox9 is best-effort/beta and never blocks CI."
-
-  # STAGEHAND-OWNED, NOT MODULESYNC-MANAGED (see ci.yml header for the
-  # DEVIATION FROM UPSTREAM pattern this repo already uses for
-  # matrix.collection/openvox9-beta). D-15 requires the complete supported
-  # Pester suite to pass on a real Windows x86_64 runner before Patchbot is
-  # releasable -- static inspection, a partial pass, or a macOS-native run
-  # are explicitly NOT sufficient evidence. This job is blocking: no
-  # continue-on-error, no experimental carve-out. 04.1-03-PLAN.md Task 1
-  # (citing pcm's d374a35 PDK-3.8 "tests move under spec/" convention for
-  # the spec/tasks/patch.Tests.ps1 path this job runs).
-  windows-pester:
-    name: Windows Pester (patch.ps1, native x64, D-15)
-    runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - name: Install pinned Pester (5.9.0)
-        shell: pwsh
-        run: |
-          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
-          Install-Module -Name Pester -RequiredVersion 5.9.0 -Force -SkipPublisherCheck -Scope CurrentUser
-
-      - name: Invoke-Pester -- complete supported suite must fully pass, no waivers
-        shell: pwsh
-        run: |
-          Import-Module Pester -RequiredVersion 5.9.0 -Force
-          $result = Invoke-Pester -Path ./spec/tasks/patch.Tests.ps1 -CI -PassThru
-          if ($result.FailedCount -gt 0) {
-            Write-Error "Pester reported $($result.FailedCount) failing case(s) on native Windows x64 -- D-15 forbids waiving any."
-            exit 1
-          }

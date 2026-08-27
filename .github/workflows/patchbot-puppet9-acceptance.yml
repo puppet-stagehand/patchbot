@@ -127,7 +127,7 @@ jobs:
               ;;
             dnf)
               dnf install -y -q curl
-              ELV=$(rpm -E %{rhel} 2>/dev/null || true)
+              ELV=$(rpm -E '%{rhel}' 2>/dev/null || true)
               case "$ELV" in
                 ''|*%*) echo "::error::cannot determine EL major via rpm -E %{rhel}"; exit 1 ;;
               esac
