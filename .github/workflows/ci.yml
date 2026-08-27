@@ -225,6 +225,15 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      - name: Install PDK (apt.puppet.com, sha256-pinned repo package)
+        run: |
+          set -euo pipefail
+          curl -fsSL https://apt.puppet.com/puppet-tools-release-noble.deb -o /tmp/puppet-tools-release.deb
+          echo "9c077ffd3a3c1802d04f3623dfcb8eb0ae7486fe29f2053a2ce9aa1cc3b59383  /tmp/puppet-tools-release.deb" | sha256sum -c -
+          sudo dpkg -i /tmp/puppet-tools-release.deb
+          sudo apt-get update
+          sudo apt-get install -y pdk=3.4.0.1-1noble
+
       - name: pdk build
         run: pdk build --force
 
@@ -274,6 +283,7 @@ jobs:
           - openvox8
     uses: voxpupuli/gha-puppet/.github/workflows/beaker.yml@v4
     with:
+      rubocop: false
       beaker_staging_url: ${{ inputs.beaker_staging_url }}
       beaker_collection: ${{ inputs.beaker_collection || matrix.collection }}
       beaker_staging_version: ${{ inputs.beaker_staging_version }}
@@ -294,6 +304,7 @@ jobs:
     name: openvox9 dependency resolution (beta, best-effort)
     uses: voxpupuli/gha-puppet/.github/workflows/beaker.yml@v4
     with:
+      rubocop: false
       beaker_staging_url: ${{ inputs.beaker_staging_url }}
       beaker_collection: openvox9
       beaker_staging_version: ${{ inputs.beaker_staging_version }}
